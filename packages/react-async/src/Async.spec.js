@@ -3,6 +3,7 @@
 import "jest-dom/extend-expect"
 import React from "react"
 import { render, fireEvent, cleanup, waitForElement } from "@testing-library/react"
+import waitForExpect from 'wait-for-expect'
 import Async, { createInstance, globalScope } from "./index"
 import {
   resolveIn,
@@ -75,6 +76,53 @@ describe("Async.Fulfilled", () => {
     await waitForElement(() => getByText("fail"))
     expect(queryByText("ok")).toBeNull()
     expect(queryByText("fail")).toBeInTheDocument()
+  })
+
+  test("when promiseFn argument changed, the side-effectful children get their effects triggered only on new data and new argument value (not old data and new argument value)", async () => {
+    let sideEffectSpy = jest.fn()
+
+    const ComponentWithSideEffectDependentOnDataAndProperty = ({ data, promiseFnArgument }) => {
+      React.useEffect(() => sideEffectSpy({ data, promiseFnArgument }))
+
+      // Return something, but we're really interested in the `sideEffectSpy`, as the side effects are the most severe problem. A flicker on the UI and performance overhead are rather benign.
+      return (
+        <>
+          <section>{promiseFnArgument}</section>
+          <section>{data}</section>
+        </>
+      )
+    }
+
+    const promiseFn = allArgs => resolveTo(`Data fulfilled for promiseFnArgument='${allArgs.promiseFnArgument}'`)
+
+    // Extracting `azyncUsageCode` as function because `rerender` on the whole thing seems to be the only way to update a property in Testing Library - https://testing-library.com/docs/example-update-props
+    const azyncUsageCode = ({ promiseFnArgument }) => (
+      <Async promiseFn={promiseFn} promiseFnArgument={promiseFnArgument}>
+        <Async.Fulfilled>
+          {data => (
+            <ComponentWithSideEffectDependentOnDataAndProperty
+              data={data}
+              promiseFnArgument={promiseFnArgument}
+            />
+          )}
+        </Async.Fulfilled>
+      </Async>
+    )
+
+    const { rerender } = render(azyncUsageCode({ promiseFnArgument: "old argument" }))
+    await waitForExpect(() => expect(sideEffectSpy).toHaveBeenCalled())
+
+    sideEffectSpy.mockClear()
+
+    rerender(azyncUsageCode({ promiseFnArgument: "new argument" }))
+
+    await waitForExpect(() => expect(sideEffectSpy).toHaveBeenCalled())
+    for (const callArgs of sideEffectSpy.mock.calls) {
+      expect(callArgs[0]).toEqual({
+        promiseFnArgument: "new argument",
+        data: "data fulfilled for promiseFnArgument='new argument'",
+      })
+    }
   })
 
   test("with persist renders old data on error", async () => {
